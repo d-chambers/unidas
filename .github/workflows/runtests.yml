@@ -44,8 +44,11 @@ jobs:
       - name: run setup env
         run: uv sync
 
-      - name: print dependencies
+      - name: print installed packages
         run: uv tree
+
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
 
       - name: run pytest
         run: uv run pytest -s --cov src --cov-append --cov-report=xml
