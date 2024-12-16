@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # Unidas version indicator. When incrementing, be sure to update
 # pyproject.toml as well.
-__version___ = "0.0.1"
+__version__ = "0.0.0"
 
 # Explicitly defines unidas' public API.
 # https://peps.python.org/pep-0008/#public-and-internal-interfaces
@@ -60,7 +60,7 @@ def optional_import(package_name: str) -> ModuleType:
     >>> dc = optional_import('unidas')
     >>> try:
     ...     optional_import('boblib5')  # doesn't exist so this raises
-    ... except MissingOptionalDependencyError:
+    ... except ImportError:
     ...     pass
     """
     try:
@@ -126,6 +126,12 @@ def time_to_datetime(obj):
         utc = zoneinfo.ZoneInfo("UTC")
         obj = datetime.datetime.fromisoformat(str(obj)).astimezone(utc)
     return obj
+
+
+def to_stripped_utc(time: datetime.datetime):
+    """Convert a datetime to UTC then strip timezone info"""
+    out = time.astimezone(zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
+    return out
 
 
 @runtime_checkable
@@ -220,7 +226,7 @@ class EvenlySampledCoordinate(Coordinate):
         # python datetimes to numpy.
         tie_values = self.tie_values
         if isinstance(self.tie_values[0], datetime.datetime):
-            tie_values = [np.datetime64(x) for x in tie_values]
+            tie_values = [np.datetime64(to_stripped_utc(x)) for x in tie_values]
         data = {"tie_indices": self.tie_indices, "tie_values": tie_values}
         out = xcoords.InterpCoordinate(data=data)
         return out
