@@ -48,11 +48,11 @@ jobs:
         run: uv tree
 
       - name: run pytest
-        run: uv run pytest -s --cov src/unidas --cov-append --cov-report=xml
+        run: uv run pytest -s --cov src --cov-append --cov-report=xml
 
       # Runs examples in docstrings
       - name: test docstrings
-        run: uv run pytest src/unidas --doctest-modules
+        run: uv run pytest src --doctest-modules
 
       # Upload coverage files
       - uses: codecov/codecov-action@v5

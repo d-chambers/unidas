@@ -60,7 +60,7 @@ def optional_import(package_name: str) -> ModuleType:
     >>> dc = optional_import('unidas')
     >>> try:
     ...     optional_import('boblib5')  # doesn't exist so this raises
-    ... except MissingOptionalDependencyError:
+    ... except ImportError:
     ...     pass
     """
     try:
