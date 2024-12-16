@@ -2,9 +2,11 @@
 name: TestCode
 on:
   push:
-    paths:
-      - '../../pyproject.toml'
-      - '../../src/unidas.py'
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
