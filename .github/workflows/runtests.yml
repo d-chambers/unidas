@@ -2,11 +2,6 @@
 name: TestCode
 on:
   push:
-    branches:
-    - main
-  pull_request:
-    branches:
-    - main
     paths:
       - '../../pyproject.toml'
       - '../../src/unidas.py'
