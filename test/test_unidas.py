@@ -6,7 +6,50 @@ import dascore as dc
 import daspy
 import numpy as np
 import pytest
+from lightguide.blast import Blast
 from unidas import BaseDAS, adapter, convert, optional_import
+from xdas.core.dataarray import DataArray
+
+# A tuple of format names for testing generic conversions.
+NAME_CLASS_MAP = {
+    "dascore.Patch": dc.Patch,
+    "xdas.DataArray": DataArray,
+    "daspy.Section": daspy.Section,
+    "lightguide.Blast": Blast,
+}
+BASE_FORMATS = tuple(NAME_CLASS_MAP)
+
+
+class TestFormatConversionCombinations:
+    """Tests for combinations of different formats."""
+
+    # Note: we could also parametrize the base structure fixtures to make
+    # all of these one test, but then it can get confusing to debug so
+    # I am making one test for each format that then tests converting to
+    # all other formats.
+    @pytest.mark.parametrize("target_format", BASE_FORMATS)
+    def test_convert_blast(self, lightguide_blast, target_format):
+        """Test that the base blast can be converted to all formats."""
+        out = convert(lightguide_blast, to=target_format)
+        assert isinstance(out, NAME_CLASS_MAP[target_format])
+
+    @pytest.mark.parametrize("target_format", BASE_FORMATS)
+    def test_convert_patch(self, dascore_patch, target_format):
+        """Test that the base patch can be converted to all formats."""
+        out = convert(dascore_patch, to=target_format)
+        assert isinstance(out, NAME_CLASS_MAP[target_format])
+
+    @pytest.mark.parametrize("target_format", BASE_FORMATS)
+    def test_convert_data_array(self, xdas_dataarray, target_format):
+        """Test that the base data array can be converted to all formats."""
+        out = convert(xdas_dataarray, to=target_format)
+        assert isinstance(out, NAME_CLASS_MAP[target_format])
+
+    @pytest.mark.parametrize("target_format", BASE_FORMATS)
+    def test_convert_section(self, daspy_section, target_format):
+        """Test that the base section can be converted to all formats."""
+        out = convert(daspy_section, to=target_format)
+        assert isinstance(out, NAME_CLASS_MAP[target_format])
 
 
 class TestOptionalImport:
@@ -136,7 +179,7 @@ class TestAdapter:
             assert isinstance(sec, daspy.Section)
             return sec
 
-        patch = dascore_patch.transpose("time", "distance")
+        patch = dascore_patch.transpose("distance", "time")
         out = section_function(patch)
         assert isinstance(out, dc.Patch)
 

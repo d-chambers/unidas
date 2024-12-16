@@ -18,6 +18,7 @@ import datetime
 import importlib
 import inspect
 from collections import defaultdict, deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache, wraps
 from types import ModuleType
@@ -65,7 +66,7 @@ def optional_import(package_name: str) -> ModuleType:
         mod = importlib.import_module(package_name)
     except ImportError:
         url = PROJECT_URLS.get(package_name)
-        help_str = f" See {url} for installation." if url else ""
+        help_str = f" See {url} for installation instructions." if url else ""
         msg = (
             f"{package_name} is not installed but is required for the "
             f"requested functionality.{help_str}"
@@ -161,33 +162,39 @@ class EvenlySampledCoordinate(Coordinate):
     A coordinate which is evenly sampled and contiguous.
     """
 
-    start: Any
-    stop: Any
     step: Any
+    tie_values: Sequence
+    tie_indices: Sequence[int]
     units: Any = None
+    dims: tuple[str] = ()
 
     def to_dascore_coord(self):
         """Convert to a dascore coordinate."""
         dc = optional_import("dascore")
         dc_core = optional_import("dascore.core")
-        # A hack for now; dascore get_coord doesn't yet support datetime
-        data = self.to_dict()
-        if isinstance(data["start"], datetime.datetime):
-            data["start"] = dc.to_datetime64(data["start"])
-            data["stop"] = dc.to_datetime64(data["stop"])
-            data["step"] = dc.to_timedelta64(data["step"])
 
-        return dc_core.get_coord(**data)
+        if len(self.tie_values) > 2:
+            msg = "DASCore doesn't support gaps in coordinates."
+            raise NotImplementedError(msg)
+
+        start, stop, step = self.tie_values[0], self.tie_values[1], self.step
+        if isinstance(start, datetime.datetime):
+            start = dc.to_datetime64(start)
+            stop = dc.to_datetime64(stop)
+            step = dc.to_timedelta64(step)
+
+        return dc_core.get_coord(start=start, stop=stop, step=step, units=self.units)
 
     def to_xdas_coord(self):
         """Convert to an XDAS coordinate."""
         xcoords = optional_import("xdas.core.coordinates")
-        tie_values = self.start, self.stop
-        value_range = self.stop - self.start
-        length = int(round(value_range / self.step, 0))
-        # TODO is it right to assume index starts at 0 for these conversions?
-        tie_indices = 0, length
-        data = {"tie_indices": tie_indices, "tie_values": tie_values}
+        np = optional_import("numpy")
+        # Currently, xdas expects a number or numpy datatime, need to convert
+        # python datetimes to numpy.
+        tie_values = self.tie_values
+        if isinstance(self.tie_values[0], datetime.datetime):
+            tie_values = [np.datetime64(x) for x in tie_values]
+        data = {"tie_indices": self.tie_indices, "tie_values": tie_values}
         return xcoords.InterpCoordinate(data=data)
 
 
@@ -199,6 +206,7 @@ class ArrayCoordinate(Coordinate):
 
     data: ArrayLike
     units: Any = None
+    dims: tuple[str] = ()
 
     def to_dascore_coord(self):
         """Convert to a dascore coordinate."""
@@ -211,26 +219,23 @@ class BaseDAS:
     """
     The base representation of DAS data for unidas.
 
-    This should only be used internally and is subject to change.
+    This should only be used internally because it is subject to change
+    between versions.
     """
 
     data: ArrayLike
-    coords: dict[str, tuple[tuple[str, ...], Coordinate]]
+    coords: dict[str, Coordinate]
     attrs: dict[str, Any]
     dims: tuple[str, ...]
 
     def _coord_to_dict(self, flavor=None):
         """Convert the coordinates to a dictionary."""
         out = {}
-        for name, (dims, coord) in self.coords.items():
+        for name, coord in self.coords.items():
             if flavor == "dascore":
-                # Dascore support non-dimensional coordinates so it beset to
-                # pass in this form.
+                dims = (name,) if not coord.dims else coord.dims
                 out[name] = (dims, coord.to_dict(flavor=flavor))
-            elif flavor in {"xdas", "simple"}:
-                # It seems coordinates must be a flat dictionary for xdas.
-                # It is also easier to work with flat version for other
-                # libraries.
+            elif flavor in {"xdas", "simple", None}:
                 out[name] = coord.to_dict(flavor=flavor)
         return out
 
@@ -245,7 +250,6 @@ class BaseDAS:
         """
         out = dict(self.__dict__)
         out["coords"] = self._coord_to_dict(flavor=flavor)
-        # Convert coordinates to the specified flavor.
         return out
 
 
@@ -377,14 +381,15 @@ class UnidasBasDASConverter(Converter):
         dasdt = daspy.DASDateTime
         out = base_das.to_dict(flavor="simple")
         assert set(out["coords"]) == set(["time", "distance"])
-        assert out["dims"] == ("time", "distance")
+        assert out["dims"] == ("distance", "time")
         time, dist = out["coords"]["time"], out["coords"]["distance"]
+        start_time = time_to_datetime(time["tie_values"][0])
         section = daspy.Section(
-            data=base_das.data.T,
+            data=base_das.data,
             fs=1 / time_to_float(time["step"]),  # This is sampling rate in Hz
             dx=dist["step"],
-            start_distance=dist["start"],
-            start_time=dasdt.from_datetime(time_to_datetime(time["start"])),
+            start_distance=dist["tie_values"][0],
+            start_time=dasdt.from_datetime(start_time),
             **out["attrs"],
         )
         return section
@@ -396,13 +401,15 @@ class UnidasBasDASConverter(Converter):
 
         data_dict = base_base.to_dict(flavor="simple")
         coords = data_dict["coords"]
+        dist_step = coords["distance"]["step"]
+        start_channel = round(coords["distance"]["tie_values"][0] / dist_step)
 
         out = lg_blast.Blast(
             data=data_dict["data"],
-            start_time=coords["time"]["start"],
+            start_time=coords["time"]["tie_values"][0],
             sampling_rate=1 / coords["time"]["step"],
-            start_channel=coords["channel"]["start"],
-            channel_spacing=coords["channel"]["step"],
+            start_channel=start_channel,
+            channel_spacing=coords["distance"]["step"],
             **data_dict["attrs"],
         )
         return out
@@ -415,15 +422,17 @@ class DASCorePatchConverter(Converter):
 
     name = "dascore.Patch"
 
-    def _to_base_coords(self, coord):
+    def _to_base_coords(self, coord, dims):
         """Convert a coordinate to base coordinates."""
-        # Convert coordinates to {Name: ((dim_1, dim_2, ...), array or coord)}
         if coord.evenly_sampled:
+            tie_inds = (0, len(coord))
+            tie_vals = (coord.start, coord.stop)
             return EvenlySampledCoordinate(
-                start=coord.start,
-                stop=coord.stop,
-                step=coord.step,
+                tie_values=tie_vals,
+                tie_indices=tie_inds,
                 units=coord.units,
+                dims=dims,
+                step=coord.step,
             )
         else:
             return ArrayCoordinate(array=coord.array, units=coord.units)
@@ -433,7 +442,7 @@ class DASCorePatchConverter(Converter):
         """Convert dascore patch to base representation."""
         coords = patch.coords
         base_coords = {
-            i: (coords.dim_map[i], self._to_base_coords(v))
+            i: self._to_base_coords(v, dims=coords.dim_map[i])
             for i, v in patch.coords.coord_map.items()
         }
         out = {
@@ -464,26 +473,30 @@ class DASPySectionConverter(Converter):
     @converts_to("unidas.BaseDAS")
     def to_base(self, section) -> BaseDAS:
         """Convert dascore patch to base representation."""
-        # Not sure this is correct, but just grab time/distance here.
-        # TODO figure out how to get units attached.
-        dims = ("time", "distance")  # TODO is dim order always time, distance?
+        # TODO figure out how to get units attached, or are they assumed?
+        dims = ("distance", "time")  # TODO is dim order always consistent?
+        start_time = section.start_time.utc().to_datetime()
+        end_time = section.end_time.utc().to_datetime()
+
         time_coord = EvenlySampledCoordinate(
-            start=section.start_time.utc().to_datetime(),
-            stop=section.end_time.utc().to_datetime(),
+            tie_values=(start_time, end_time),
+            tie_indices=(0, section.data.shape[1]),
             step=section.dt,
+            dims=("time",),
         )
         distance_coord = EvenlySampledCoordinate(
-            start=section.start_distance,
-            stop=section.end_distance,
+            tie_values=(section.start_distance, section.end_distance),
+            tie_indices=(0, section.data.shape[0]),
             step=section.dx,
+            dims=("distance",),
         )
         coords = {
-            "time": (("time",), time_coord),
-            "distance": (("distance",), distance_coord),
+            "distance": distance_coord,
+            "time": time_coord,
         }
         attrs = extract_attrs(section, self._section_attrs)
         # Need to transpose array so the dimensions correspond to dims.
-        return BaseDAS(data=section.data.T, dims=dims, coords=coords, attrs=attrs)
+        return BaseDAS(data=section.data, dims=dims, coords=coords, attrs=attrs)
 
 
 class LightGuideConverter(Converter):
@@ -497,24 +510,29 @@ class LightGuideConverter(Converter):
 
     def _get_coords(self, blast):
         """Get base coordinates from Blast."""
-        channel = EvenlySampledCoordinate(
-            start=blast.start_channel,
-            stop=blast.end_channel,
+        # Need to convert channel numbers to distance.
+        start_distance = blast.start_channel * blast.channel_spacing
+        end_distance = blast.end_channel * blast.channel_spacing
+        distance = EvenlySampledCoordinate(
+            tie_values=(start_distance, end_distance),
+            tie_indices=(0, blast.data.shape[0]),
             step=blast.channel_spacing,
+            dims=("distance",),
         )
         time = EvenlySampledCoordinate(
-            start=blast.start_time,
-            stop=blast.end_time,
+            tie_values=(blast.start_time, blast.end_time),
+            tie_indices=(0, blast.data.shape[1]),
             step=blast.delta_t,
+            dims=("time",),
         )
-        return {"channel": (("channel"), channel), "time": (("time",), time)}
+        return {"distance": distance, "time": time}
 
     @converts_to("unidas.BaseDAS")
     def to_base(self, blast) -> BaseDAS:
         """Convert dascore patch to base representation."""
         # From the plot on lightguide's readme it appears the dims are
         # (channel, time). We need to check if this is always true.
-        dims = ("channel", "time")
+        dims = ("distance", "time")
         coords = self._get_coords(blast)
         out = BaseDAS(
             data=blast.data,
@@ -529,28 +547,38 @@ class XDASConverter(Converter):
     name = "xdas.DataArray"
 
     def _to_base_coords(self, data_array):
-        """Convert the xdas coordinates to base coordinates."""
+        """Convert the xdas coordinates to unidas coordinates."""
         xcoords = optional_import("xdas.core.coordinates")
         coords = data_array.coords
         coords_out = {}
         for name, coord in coords.items():
-            dims = (coord.dim,) if isinstance(coord.dim, str) else coord.dim
-            # We may need to add support for xdas' tie_values somehow, but other
-            # libraries handle gaps differently. For now, we raise if there are
-            # any gaps, which I interpret as more than 2 tie values. Need to
-            # double check that this is right.
-            assert len(coord.tie_values) <= 2, "Tie values imply gaps, cant convert"
+            dims = (coord.dim,) if isinstance(coord.dim, str) else (name,)
+            # Other libraries handle gaps differently. For now, we raise if
+            # there are any gaps, which I interpret as more than 2 tie values.
+            # Need to double check that this is right.
+            if len(coord.tie_values) > 2:
+                msg = (
+                    "Tie values of xdas coordinates imply gaps, cant convert to "
+                    "other formats"
+                )
+                raise NotImplementedError(msg)
             # It seems the InterpCoordinate is evenly sampled, monotonic.
             if isinstance(coord, xcoords.InterpCoordinate):
                 step = xcoords.get_sampling_interval(
                     da=data_array, dim=name, cast=False
                 )
-                coord = EvenlySampledCoordinate(
-                    start=coord.get_value(0), stop=coord.get_value(-1), step=step
+                ucoord = EvenlySampledCoordinate(
+                    tie_values=coord.tie_values,
+                    tie_indices=coord.tie_indices,
+                    step=step,
+                    dims=dims,
                 )
             else:
-                coord = ArrayCoordinate(data=coord.values)
-            coords_out[name] = (dims, coord)
+                ucoord = ArrayCoordinate(
+                    data=coord.values,
+                    dims=dims,
+                )
+            coords_out[name] = ucoord
         return coords_out
 
     @converts_to("unidas.BaseDAS")
