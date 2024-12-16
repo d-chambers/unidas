@@ -1,9 +1,9 @@
-# Upload to PyPI when a new release tag is made.
+# Upload to PyPI when new code lands in main.
 name: PublishPackage
 on:
-  release:
-    types:
-      - published
+  push:
+    branches:
+    - main
 
 jobs:
   upload:
