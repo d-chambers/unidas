@@ -1,0 +1,21 @@
+# Upload to PyPI when a new release tag is made.
+name: PublishPackage
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: build and publish
+        shell: bash -l {0}
+        run: |
+          uv build
+          uv publish

@@ -6,6 +6,7 @@ import dascore as dc
 import daspy
 import numpy as np
 import pytest
+import unidas
 from lightguide.blast import Blast
 from unidas import BaseDAS, adapter, convert, optional_import
 from xdas.core.dataarray import DataArray
@@ -18,6 +19,37 @@ NAME_CLASS_MAP = {
     "lightguide.Blast": Blast,
 }
 BASE_FORMATS = tuple(NAME_CLASS_MAP)
+
+
+# --- Tests for unidas utilities.
+
+
+class TestOptionalImport:
+    """Test suite for optional imports."""
+
+    def test_import_installed_module(self):
+        """Test to ensure an installed module imports."""
+        import functools
+
+        mod = optional_import("functools")
+        assert mod is functools
+
+    def test_missing_module_raises(self):
+        """Ensure a module which is missing raises the appropriate Error."""
+        with pytest.raises(ImportError, match="boblib4"):
+            optional_import("boblib4")
+
+
+class TestMisc:
+    """Miscellaneous tests for unidas."""
+
+    def test_version(self):
+        """Simply ensure unidas has a version attribute."""
+        assert hasattr(unidas, "__version__")
+        assert isinstance(unidas.__version__, str)
+
+
+# --------- Tests for unidas conversions.
 
 
 class TestFormatConversionCombinations:
@@ -50,22 +82,6 @@ class TestFormatConversionCombinations:
         """Test that the base section can be converted to all formats."""
         out = convert(daspy_section, to=target_format)
         assert isinstance(out, NAME_CLASS_MAP[target_format])
-
-
-class TestOptionalImport:
-    """Test suite for optional imports."""
-
-    def test_import_installed_module(self):
-        """Test to ensure an installed module imports."""
-        import functools
-
-        mod = optional_import("functools")
-        assert mod is functools
-
-    def test_missing_module_raises(self):
-        """Ensure a module which is missing raises the appropriate Error."""
-        with pytest.raises(ImportError, match="boblib4"):
-            optional_import("boblib4")
 
 
 class TestDASCorePatch:
