@@ -128,6 +128,12 @@ def time_to_datetime(obj):
     return obj
 
 
+def to_stripped_utc(time: datetime.datetime):
+    """Convert a datetime to UTC then strip timezone info"""
+    out = time.astimezone(zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
+    return out
+
+
 @runtime_checkable
 class ArrayLike(Protocol, Sized):
     """
@@ -220,7 +226,7 @@ class EvenlySampledCoordinate(Coordinate):
         # python datetimes to numpy.
         tie_values = self.tie_values
         if isinstance(self.tie_values[0], datetime.datetime):
-            tie_values = [np.datetime64(x) for x in tie_values]
+            tie_values = [np.datetime64(to_stripped_utc(x)) for x in tie_values]
         data = {"tie_indices": self.tie_indices, "tie_values": tie_values}
         out = xcoords.InterpCoordinate(data=data)
         return out
