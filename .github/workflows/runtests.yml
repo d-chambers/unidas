@@ -42,7 +42,7 @@ jobs:
         uses: astral-sh/setup-uv@v3
 
       - name: run setup env
-        run: \
+        run: |
           uv venv unidas 
           source unidas/bin/activate
           uv pip install -e .[dev]
