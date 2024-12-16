@@ -43,7 +43,7 @@ jobs:
 
       - name: run setup env
         run: |
-          uv venv unidas 
+          uv venv unidas --python ${{ matrix.python-version }}
           source unidas/bin/activate
           uv pip install -e .[dev]
 
